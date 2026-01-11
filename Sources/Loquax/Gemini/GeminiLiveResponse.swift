@@ -21,10 +21,14 @@ struct GeminiLiveResponse: Decodable, Sendable {
     public struct ServerContent: Decodable, Sendable {
         public let modelTurn: ModelTurn?
         public let turnComplete: Bool?
+        public let inputTranscription: BidiGenerateContentTranscription?
+        public let outputTranscription: BidiGenerateContentTranscription?
 
         enum CodingKeys: String, CodingKey {
             case modelTurn = "modelTurn"
             case turnComplete = "turnComplete"
+            case inputTranscription = "inputTranscription"
+            case outputTranscription = "outputTranscription"
         }
 
         public struct ModelTurn: Decodable, Sendable {
@@ -48,6 +52,13 @@ struct GeminiLiveResponse: Decodable, Sendable {
                         case data
                     }
                 }
+            }
+        }
+        
+        public struct BidiGenerateContentTranscription: Decodable, Sendable {
+            public let text: String
+            enum CodingKeys: String, CodingKey {
+                case text
             }
         }
     }

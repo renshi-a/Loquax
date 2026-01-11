@@ -9,6 +9,15 @@ import AVFoundation
 import Foundation
 import Starscream
 
+public struct AudioTranscription: Sendable, Equatable, Identifiable {
+    public let id: UUID
+    public let text: String
+    init(id: UUID, text: String) {
+        self.id = id
+        self.text = text
+    }
+}
+
 public class Loquax: WebSocketDelegate {
     enum Const {
         static let SERVICE_URL = """
@@ -27,8 +36,29 @@ public class Loquax: WebSocketDelegate {
     private var audioEngine: AVAudioEngine?
     private var audioPlayer: AVAudioPlayer?
     
-    public init(model: SupportedAIModel) {
-        self.setup = .init(model: model)
+    public var inputAudioStream: AsyncStream<AudioTranscription>?
+    public var outputAudioStream: AsyncStream<AudioTranscription>?
+    
+    private var inputAudioContinuation: AsyncStream<AudioTranscription>.Continuation?
+    private var outputAudioContinuation: AsyncStream<AudioTranscription>.Continuation?
+    
+    private var isContinuingInput: Bool = false
+    private var inputId: UUID?
+    private var isContinuingOutput: Bool = false
+    private var outputId: UUID?
+    
+    public init(
+        model: SupportedAIModel,
+        needTranscription: Bool = false
+    ) {
+        var responseModalities = [model.responseModalities]
+        let bidiSetup = BidiGenerateContentSetup(
+            model: model,
+            generationConfig: .init(responseModalities: responseModalities),
+            inputAudioTranscription: needTranscription ? .init() : nil,
+            outputAudioTranscription: needTranscription ? .init() : nil
+        )
+        self.setup = .init(setup: bidiSetup)
     }
     
     public func connect(
@@ -83,6 +113,14 @@ public class Loquax: WebSocketDelegate {
         try await Task.sleep(nanoseconds: 100_000_000)
         
         try startAudioStream()
+        
+        let (inputSteam, inputContinuation) = AsyncStream<AudioTranscription>.makeStream()
+        self.inputAudioStream = inputSteam
+        self.inputAudioContinuation = inputContinuation
+        
+        let (outputSteam, outputContinuation) = AsyncStream<AudioTranscription>.makeStream()
+        self.outputAudioStream = outputSteam
+        self.outputAudioContinuation = outputContinuation
     }
 }
 
@@ -108,8 +146,58 @@ extension Loquax {
                 if serverContent.modelTurn != nil {
                     turns.append(response)
                 }
+                
+                if let input = serverContent.inputTranscription?.text {
+                    if !isContinuingInput {
+                        isContinuingInput = true
+                        self.inputId = .init()
+                    }
+                    
+                    if isContinuingOutput { // 出力から入力へ切り替わったとき
+                        isContinuingOutput = false
+                        guard let outputId else {
+                            assert(false)
+                            return
+                        }
+                        outputAudioContinuation?.yield(.init(id: outputId, text: ""))
+                        self.outputId = nil
+                    }
+                    
+                    guard let inputId else {
+                        assert(false)
+                        return
+                    }
+                    inputAudioContinuation?.yield(.init(id: inputId, text: input))
+                }
+                
+                if let output = serverContent.outputTranscription?.text {
+                    if !isContinuingOutput {
+                        isContinuingOutput = true
+                        self.outputId = .init()
+                    }
+                    
+                    if isContinuingInput {
+                        isContinuingInput = false
+                        guard let inputId else {
+                            assert(false)
+                            return
+                        }
+                        inputAudioContinuation?.yield(.init(id: inputId, text: ""))
+                        self.inputId = nil
+                    }
+                    
+                    guard let outputId else {
+                        assert(false)
+                        return
+                    }
+                    outputAudioContinuation?.yield(.init(id: outputId, text: output))
+                }
 
                 if serverContent.turnComplete != nil {
+                    isContinuingInput = false
+                    isContinuingOutput = false
+                    inputId = nil
+                    outputId = nil
                     onTurnCompleted()
                     turns.removeAll()
                 }
@@ -249,8 +337,6 @@ private extension Loquax {
         }
         
         self.audioEngine = audioEngine
-        
-        print("Loquax startAudioStream end")
     }
     
     func onTurnCompleted() {

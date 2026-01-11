@@ -25,18 +25,28 @@ struct BidiGenerateContentSetup: Encodable {
     public let generationConfig: GenerationConfig?
     public let systemInstruction: SystemInstruction?
     public let tools: [Tool]?
+    public let inputAudioTranscription: AudioTranscriptionConfig?
+    public let outputAudioTranscription: AudioTranscriptionConfig?
     
     public init(
         model: SupportedAIModel,
         generationConfig: GenerationConfig? = nil,
         systemInstruction: SystemInstruction? = nil,
-        tools: [Tool]? = nil
+        tools: [Tool]? = nil,
+        inputAudioTranscription: AudioTranscriptionConfig? = nil,
+        outputAudioTranscription: AudioTranscriptionConfig? = nil
     ) {
         self.model = "models/\(model.modelName)"
         self.generationConfig = generationConfig
         self.systemInstruction = systemInstruction
         self.tools = tools
+        self.inputAudioTranscription = inputAudioTranscription
+        self.outputAudioTranscription = outputAudioTranscription
     }
+}
+
+public struct AudioTranscriptionConfig: Encodable {
+    public init() {}
 }
 
 struct GenerationConfig: Encodable {
