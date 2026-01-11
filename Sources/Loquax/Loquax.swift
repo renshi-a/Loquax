@@ -18,6 +18,11 @@ public struct AudioTranscription: Sendable, Equatable, Identifiable {
     }
 }
 
+public enum BlockingStream {
+    case all
+    case threshold(Int)
+}
+
 public class Loquax: WebSocketDelegate {
     enum Const {
         static let SERVICE_URL = """
@@ -34,7 +39,9 @@ public class Loquax: WebSocketDelegate {
     
     // Audio
     private var audioEngine: AVAudioEngine?
-    private var audioPlayer: AVAudioPlayer?
+    private var playerNode: AVAudioPlayerNode?
+    private var isPlaying: Bool = false
+    private var currentVolume: Float = 0.8
     
     public var inputAudioStream: AsyncStream<AudioTranscription>?
     public var outputAudioStream: AsyncStream<AudioTranscription>?
@@ -47,9 +54,12 @@ public class Loquax: WebSocketDelegate {
     private var isContinuingOutput: Bool = false
     private var outputId: UUID?
     
+    private let blocking: BlockingStream
+    
     public init(
         model: SupportedAIModel,
-        needTranscription: Bool = false
+        needTranscription: Bool = false,
+        blocking: BlockingStream = .all
     ) {
         var responseModalities = [model.responseModalities]
         let bidiSetup = BidiGenerateContentSetup(
@@ -59,6 +69,7 @@ public class Loquax: WebSocketDelegate {
             outputAudioTranscription: needTranscription ? .init() : nil
         )
         self.setup = .init(setup: bidiSetup)
+        self.blocking = blocking
     }
     
     public func connect(
@@ -192,14 +203,23 @@ extension Loquax {
                     }
                     outputAudioContinuation?.yield(.init(id: outputId, text: output))
                 }
+                
+                switch blocking {
+                case let .threshold(threshold):
+                    if turns.count >= threshold {
+                        flushMessages()
+                    }
+                    
+                case .all:
+                    return
+                }
 
                 if serverContent.turnComplete != nil {
                     isContinuingInput = false
                     isContinuingOutput = false
                     inputId = nil
                     outputId = nil
-                    onTurnCompleted()
-                    turns.removeAll()
+                    flushMessages()
                 }
             }
 
@@ -257,12 +277,12 @@ private extension Loquax {
     }
     
     private func stopAudioEngine() {
-        if let engine = audioEngine {
-            if engine.isRunning {
-                engine.stop()
+        if let audioEngine {
+            if audioEngine.isRunning {
+                audioEngine.stop()
             }
-            engine.inputNode.removeTap(onBus: 0)
-            audioEngine = nil
+            audioEngine.inputNode.removeTap(onBus: 0)
+            self.audioEngine = nil
         }
     }
     
@@ -280,8 +300,20 @@ private extension Loquax {
     
     func startAudioStream() throws {
         let audioEngine = AVAudioEngine()
-        let inputNode = audioEngine.inputNode
+        let playerNode = AVAudioPlayerNode()
+        let mixer = audioEngine.mainMixerNode
         
+        audioEngine.attach(playerNode)
+        let playerFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 24000,
+            channels: 1,
+            interleaved: false
+        )
+        audioEngine.connect(playerNode, to: mixer, format: playerFormat)
+        self.playerNode = playerNode
+        
+        let inputNode = audioEngine.inputNode
         do {
             try inputNode.setVoiceProcessingEnabled(true)
         } catch {
@@ -339,17 +371,13 @@ private extension Loquax {
         self.audioEngine = audioEngine
     }
     
-    func onTurnCompleted() {
-        var message: String = ""
+    func flushMessages() {
         var audioDataArray: [String] = []
         for turn in turns {
             turn.serverContent?.modelTurn?.parts.forEach { part in
                 if let inlineData = part.inlineData,
                    inlineData.mimeType.contains("audio") {
                     audioDataArray.append(inlineData.data)
-                }
-                if let text = part.text {
-                    message.append(text)
                 }
             }
         }
@@ -364,13 +392,74 @@ private extension Loquax {
                 playAudioWithVolume(combinedAudioData, 0.9)
             }
         }
+        turns.removeAll()
     }
     
     private func playAudioWithVolume(_ data: Data, _ volume: Float) {
-        self.audioPlayer?.stop()
-        self.audioPlayer = try? AVAudioPlayer(data: data)
-        self.audioPlayer?.volume = min(1.0, max(0.0, volume))
-        self.audioPlayer?.prepareToPlay()
-        self.audioPlayer?.play()
+        let pcmData = skipWAVHeader(data)
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 24000,
+            channels: 1,
+            interleaved: false)
+        
+        guard let format else {
+            assert(false)
+            return
+        }
+        scheduleAudioBuffer(pcmData: pcmData, format: format, volume: volume)
+    }
+    
+    private func scheduleAudioBuffer(pcmData: Data, format: AVAudioFormat, volume: Float) {
+        guard let playerNode = playerNode, let audioEngine = audioEngine else {
+            return
+        }
+
+        let frameCount = AVAudioFrameCount(pcmData.count / 2)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+            return
+        }
+
+        buffer.frameLength = frameCount
+
+        pcmData.withUnsafeBytes { bytes in
+            let int16Pointer = bytes.bindMemory(to: Int16.self)
+            let channelData = buffer.floatChannelData![0]
+            for i in 0..<Int(frameCount) {
+                channelData[i] = Float(int16Pointer[i]) / 32768.0
+            }
+        }
+
+        setVolume(volume)
+
+        if !playerNode.isPlaying {
+            playerNode.play()
+            isPlaying = true
+        }
+
+        playerNode.scheduleBuffer(buffer) { [weak self] in
+            guard let self = self else { return }
+            self.checkPlayingStatus()
+        }
+    }
+    
+    private func checkPlayingStatus() {
+        if !(playerNode?.isPlaying ?? false) {
+            isPlaying = false
+        }
+    }
+    
+    private func setVolume(_ volume: Float) {
+        currentVolume = min(1.0, max(0.0, volume))
+        playerNode?.volume = currentVolume
+    }
+    
+    private func skipWAVHeader(_ data: Data) -> Data {
+        guard data.count > 44,
+              data.subdata(in: 0..<4) == "RIFF".data(using: .ascii),
+              data.subdata(in: 8..<12) == "WAVE".data(using: .ascii) else {
+            return data
+        }
+        return data.subdata(in: 44..<data.count)
     }
 }
