@@ -7,11 +7,40 @@
 
 import Foundation
 
+public struct UsageMetadata: Decodable, Sendable {
+    public let promptTokenCount: Int?
+    public let responseTokenCount: Int?
+    public let totalTokenCount: Int?
+    public let thoughtsTokenCount: Int?
+    public let cachedContentTokenCount: Int?
+    public let toolUsePromptTokenCount: Int?
+    public let promptTokensDetails: [TokenDetail]?
+    public let responseTokensDetails: [TokenDetail]?
+
+    enum CodingKeys: String, CodingKey {
+        case promptTokenCount = "promptTokenCount"
+        case cachedContentTokenCount = "cachedContentTokenCount"
+        case responseTokenCount = "responseTokenCount"
+        case toolUsePromptTokenCount = "toolUsePromptTokenCount"
+        case thoughtsTokenCount = "thoughtsTokenCount"
+        case totalTokenCount = "totalTokenCount"
+        case promptTokensDetails = "promptTokensDetails"
+        case responseTokensDetails = "responseTokensDetails"
+    }
+}
+
+public struct TokenDetail: Decodable, Sendable {
+    public let modality: String
+    public let tokenCount: Int
+}
+
 struct GeminiLiveResponse: Decodable, Sendable {
+    public let usageMetadata: UsageMetadata?
     public let setupComplete: SetupComplete?
     public let serverContent: ServerContent?
 
     enum CodingKeys: String, CodingKey {
+        case usageMetadata = "usageMetadata"
         case setupComplete = "setupComplete"
         case serverContent = "serverContent"
     }

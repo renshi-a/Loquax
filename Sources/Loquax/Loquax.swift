@@ -43,11 +43,14 @@ public class Loquax: WebSocketDelegate {
     private var isPlaying: Bool = false
     private var currentVolume: Float = 0.8
     
+    // Stream
     public var inputAudioStream: AsyncStream<AudioTranscription>?
     public var outputAudioStream: AsyncStream<AudioTranscription>?
+    public var usageMetadataStream: AsyncStream<UsageMetadata>?
     
     private var inputAudioContinuation: AsyncStream<AudioTranscription>.Continuation?
     private var outputAudioContinuation: AsyncStream<AudioTranscription>.Continuation?
+    private var usageContinuation: AsyncStream<UsageMetadata>.Continuation?
     
     private var isContinuingInput: Bool = false
     private var inputId: UUID?
@@ -132,6 +135,10 @@ public class Loquax: WebSocketDelegate {
         let (outputSteam, outputContinuation) = AsyncStream<AudioTranscription>.makeStream()
         self.outputAudioStream = outputSteam
         self.outputAudioContinuation = outputContinuation
+        
+        let (usageSteam, usageContinuation) = AsyncStream<UsageMetadata>.makeStream()
+        self.usageMetadataStream = usageSteam
+        self.usageContinuation = usageContinuation
     }
 }
 
@@ -153,6 +160,10 @@ extension Loquax {
             
             guard hasSetupCompleted else { return }
 
+            if let usageMetadata = response.usageMetadata {
+                usageContinuation?.yield(usageMetadata)
+            }
+            
             if let serverContent = response.serverContent {
                 if serverContent.modelTurn != nil {
                     turns.append(response)
