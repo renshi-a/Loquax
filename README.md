@@ -1,4 +1,6 @@
 # Loquax
+[![Gemini Live API](https://img.shields.io/badge/Google%20Gemini%20Live%20API-8E75B2?style=flat&logo=google&logoColor=white)](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/live-api)
+
 
 A lightweight Swift client for Gemini Live API.
 
@@ -13,6 +15,8 @@ Add the following dependency to your Package.swift:
 Or add the package via Xcode: File > Add Packages... and enter the repository URL: https://github.com/renshi-a/Loquax
 
 # Usage
+
+Add **Privacy - Microphone Usage Description** to your project's info.plist.
 
 Loquax features a minimal and intuitive interface.
 
